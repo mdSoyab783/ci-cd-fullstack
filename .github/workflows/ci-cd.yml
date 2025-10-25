@@ -1,0 +1,85 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: 18
+
+jobs:
+  # 1️⃣ Lint, install, test, build
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies & run tests
+        working-directory: ${{ matrix.service }}
+        run: |
+          npm ci
+          # run lint if exists
+          if npm run | grep -q lint; then
+            npm run lint || true
+          fi
+          npm test
+
+      - name: Build frontend (only)
+        if: matrix.service == 'frontend'
+        working-directory: frontend
+        run: npm run build
+
+  # 2️⃣ Deploy backend to Render
+  deploy-backend:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: ${{ always() && success() }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Deploy to Render via API
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          curl -X POST "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache":true}' \
+            --fail
+
+  # 3️⃣ Deploy frontend to Vercel
+  deploy-frontend:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: ${{ always() && success() }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@28
+
+      - name: Deploy frontend to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        working-directory: frontend
+        run: vercel --token $VERCEL_TOKEN --prod --confirm
